@@ -27,102 +27,285 @@ const bridgeUrl=params.get('bridge')||'';
 const requestedDate=params.get('date')||new Date().toLocaleDateString('en-CA');
 history.replaceState(null,'',location.pathname+location.search);
 $('date').value=requestedDate;
-let scanner=null,bridgeReady=false,sequence=0,pending=new Map(),lastScan='',busy=false;
-function show(msg,type=''){ $('status').className='status '+(type==='good'?'good':type==='bad'?'bad':'');$('status').textContent=msg; }
-function result(msg,type=''){ $('last').className='status '+(type==='good'?'good':type==='bad'?'bad':'');$('last').textContent=msg; }
 
-/*
- * URL Bridge harus berupa URL Web App Apps Script yang valid,
- * dengan parameter bridge=1 dan jalur /exec.
- */
-function validBridge(u){
-  try{
-    const x=new URL(u);
-    return x.protocol==='https:' &&
-      x.hostname==='script.google.com' &&
-      /^\/macros\/s\/[^/]+\/exec\/?$/.test(x.pathname) &&
-      x.searchParams.get('bridge')==='1';
-  }catch(e){
+let scanner = null;
+let bridgeReady = false;
+let sequence = 0;
+let pending = new Map();
+let lastScan = '';
+let busy = false;
+
+// Menampilkan status utama
+function show(msg, type = '') {
+  $('status').className = 'status ' +
+    (type === 'good' ? 'good' : type === 'bad' ? 'bad' : '');
+  $('status').textContent = msg;
+}
+
+// Menampilkan hasil pemindaian
+function result(msg, type = '') {
+  $('last').className = 'status ' +
+    (type === 'good' ? 'good' : type === 'bad' ? 'bad' : '');
+  $('last').textContent = msg;
+}
+
+// Validasi URL Bridge Apps Script
+function validBridge(url) {
+  try {
+    const x = new URL(url);
+
+    return (
+      x.protocol === 'https:' &&
+      x.hostname === 'script.google.com' &&
+      /^\/macros\/(?:u\/\d+\/)?s\/[^/]+\/exec\/?$/.test(x.pathname) &&
+      x.searchParams.get('bridge') === '1'
+    );
+  } catch (e) {
     return false;
   }
 }
 
-function post(action,payload={}){
-  if(!bridgeReady) throw Error('Bridge belum siap. Muat ulang scanner melalui aplikasi E-Presensi.');
-  const requestId=String(++sequence);
-  return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{
+// Mengirim pesan ke Bridge
+function post(action, payload = {}) {
+  if (!bridgeReady) {
+    throw new Error('Bridge belum siap. Muat ulang scanner melalui aplikasi E-Presensi.');
+  }
+
+  const requestId = String(++sequence);
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
       pending.delete(requestId);
-      reject(Error('Bridge tidak merespons. Periksa URL Web App dan deployment Apps Script.'));
-    },25000);
-    pending.set(requestId,{resolve,reject,timer});
-    /*
-     * Bridge URL dinamis dan beda origin dari GitHub Pages.
-     * Bridge.html harus memvalidasi event.source, event.origin, dan jenis pesan.
-     */
+      reject(new Error(
+        'Bridge tidak merespons. Periksa koneksi dan deployment Apps Script.'
+      ));
+    }, 25000);
+
+    pending.set(requestId, {
+      resolve,
+      reject,
+      timer
+    });
+
     $('bridgeFrame').contentWindow.postMessage(
-      {source:'EPS_GITHUB_SCANNER',action,requestId,...payload},
+      {
+        source: 'EPS_GITHUB_SCANNER',
+        action,
+        requestId,
+        ...payload
+      },
       '*'
     );
   });
 }
 
-window.addEventListener('message',e=>{
-  if(e.source!==$('bridgeFrame').contentWindow)return;
-  const d=e.data||{};
-  if(d.source!=='EPS_GAS_BRIDGE')return;
-  if(d.action==='bridgeReady'){
-    bridgeReady=true;
-    show(sessionToken?'Bridge tersambung. Siap memulai kamera.':'Sesi login tidak ditemukan. Kembali ke aplikasi dan buka scanner dari menu Scan QR.',sessionToken?'good':'bad');
+// Menerima respons dari Bridge
+window.addEventListener('message', function (e) {
+  if (e.source !== $('bridgeFrame').contentWindow) return;
+
+  const d = e.data || {};
+
+  if (d.source !== 'EPS_GAS_BRIDGE') return;
+
+  if (d.action === 'bridgeReady') {
+    bridgeReady = true;
+
+    if (sessionToken) {
+      show('Bridge tersambung. Siap memulai kamera.', 'good');
+    } else {
+      show(
+        'Sesi login tidak ditemukan. Kembali ke aplikasi dan buka scanner dari menu Scan QR.',
+        'bad'
+      );
+    }
+
     return;
   }
-  if(d.action==='pong'){bridgeReady=true;return;}
-  if(d.action==='scanResult'){
-    const p=pending.get(String(d.requestId));
-    if(p){clearTimeout(p.timer);pending.delete(String(d.requestId));p.resolve(d);}
+
+  if (d.action === 'pong') {
+    bridgeReady = true;
+    return;
+  }
+
+  if (d.action === 'scanResult') {
+    const id = String(d.requestId);
+    const p = pending.get(id);
+
+    if (p) {
+      clearTimeout(p.timer);
+      pending.delete(id);
+      p.resolve(d);
+    }
   }
 });
 
-if(!sessionToken||!validBridge(bridgeUrl)){
-  const why=!sessionToken
-    ?'Token sesi tidak ikut terkirim. Kembali ke aplikasi, login ulang, lalu buka Scan QR.'
-    :'Alamat Bridge tidak valid. Pastikan URL Web App berakhiran /exec dan memiliki parameter bridge=1; buka scanner dari aplikasi.';
-  show(why,'bad');
-  $('start').disabled=true;
-}else{
-  $('bridgeFrame').src=bridgeUrl;
+// Memeriksa sesi dan menghubungkan Bridge
+if (!sessionToken || !validBridge(bridgeUrl)) {
+
+  const why = !sessionToken
+    ? 'Token sesi tidak ikut terkirim. Login ulang dan buka Scan QR dari aplikasi.'
+    : 'Alamat Bridge tidak valid. Buka scanner melalui tombol Buka Pemindai Kamera di aplikasi.';
+
+  show(why, 'bad');
+  $('start').disabled = true;
+
+} else {
+
+  $('bridgeFrame').src = bridgeUrl;
+
 }
 
-async function stop(){
-  if(scanner){try{await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}scanner=null;}
-  busy=false;
-  $('start').disabled=false;
+// Menghentikan kamera
+async function stop() {
+  if (scanner) {
+    try {
+      await scanner.stop();
+    } catch (e) {}
+
+    try {
+      scanner.clear();
+    } catch (e) {}
+
+    scanner = null;
+  }
+
+  busy = false;
+  $('start').disabled = false;
 }
-async function start(){
-  if(!sessionToken){show('Sesi login tidak ditemukan.','bad');return;}
-  if(!window.isSecureContext){show('Kamera memerlukan HTTPS.','bad');return;}
-  if(!window.Html5Qrcode){show('Library scanner gagal dimuat. Periksa internet dan muat ulang.','bad');return;}
-  if(!bridgeReady){show('Menunggu bridge Apps Script siap…');return;}
-  try{
+
+// Memulai kamera
+async function start() {
+
+  if (!sessionToken) {
+    show('Sesi login tidak ditemukan.', 'bad');
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    show('Kamera memerlukan koneksi HTTPS.', 'bad');
+    return;
+  }
+
+  if (!window.Html5Qrcode) {
+    show('Library scanner gagal dimuat. Periksa internet dan muat ulang.', 'bad');
+    return;
+  }
+
+  if (!bridgeReady) {
+    show('Menunggu Bridge Apps Script siap...');
+    return;
+  }
+
+  try {
+
     await stop();
-    scanner=new Html5Qrcode('reader');
-    $('start').disabled=true;
-    show('Meminta izin kamera…');
-    await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:250,height:250}},async decoded=>{
-      if(busy||decoded===lastScan)return;
-      busy=true;lastScan=decoded;
-      show('QR terbaca. Memvalidasi ke server…');result('Mengirim data ke server…');
-      try{
-        const r=await post('scan',{token:sessionToken,qrToken:decoded,date:$('date').value});
-        if(r.ok){show(r.message||'Presensi berhasil disimpan.','good');result(r.message||'Presensi berhasil disimpan.','good');}
-        else{show(r.message||'Presensi gagal.','bad');result(r.message||'Presensi gagal.','bad');}
-      }catch(err){show(err.message,'bad');result(err.message,'bad');}
-      setTimeout(()=>{busy=false;lastScan='';},1800);
-    },()=>{});
-    show('Kamera aktif. Arahkan ke QR siswa.','good');
-  }catch(e){await stop();show('Kamera gagal dimulai: '+(e.message||e),'bad');}
+
+    scanner = new Html5Qrcode('reader');
+
+    $('start').disabled = true;
+
+    show('Meminta izin kamera...');
+
+    await scanner.start(
+      { facingMode: 'environment' },
+      {
+        fps: 10,
+        qrbox: {
+          width: 250,
+          height: 250
+        }
+      },
+
+      async function (decoded) {
+
+        if (busy || decoded === lastScan) return;
+
+        busy = true;
+        lastScan = decoded;
+
+        show('QR terbaca. Memvalidasi ke server...');
+        result('Mengirim data ke server...');
+
+        try {
+
+          const r = await post('scan', {
+            token: sessionToken,
+            qrToken: decoded,
+            date: $('date').value
+          });
+
+          if (r.ok) {
+
+            show(
+              r.message || 'Presensi berhasil disimpan.',
+              'good'
+            );
+
+            result(
+              r.message || 'Presensi berhasil disimpan.',
+              'good'
+            );
+
+          } else {
+
+            show(
+              r.message || 'Presensi gagal.',
+              'bad'
+            );
+
+            result(
+              r.message || 'Presensi gagal.',
+              'bad'
+            );
+
+          }
+
+        } catch (err) {
+
+          show(err.message, 'bad');
+          result(err.message, 'bad');
+
+        }
+
+        setTimeout(() => {
+          busy = false;
+          lastScan = '';
+        }, 1800);
+
+      },
+
+      function () {}
+    );
+
+    show('Kamera aktif. Arahkan ke QR siswa.', 'good');
+
+  } catch (e) {
+
+    await stop();
+
+    show(
+      'Kamera gagal dimulai: ' + (e.message || e),
+      'bad'
+    );
+
+  }
 }
-$('start').addEventListener('click',start);
-$('stop').addEventListener('click',async()=>{await stop();show('Kamera dihentikan.');});
+
+// Tombol mulai scanner
+$('start').addEventListener('click', start);
+
+// Tombol berhenti scanner
+$('stop').addEventListener('click', async function () {
+  await stop();
+  show('Kamera dihentikan.');
+});
+
+// Membersihkan kamera ketika halaman ditutup
+window.addEventListener('beforeunload', function () {
+  if (scanner) {
+    scanner.stop().catch(() => {});
+  }
+});
+  
 window.addEventListener('beforeunload',()=>{if(scanner)scanner.stop().catch(()=>{});});
 </script></body></html>
